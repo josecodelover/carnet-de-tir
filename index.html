@@ -76,6 +76,12 @@ h3{font-family:var(--f-display);font-weight:600;font-size:18px;margin:0 0 8px;le
 #face{touch-action:none;display:block;border-radius:4px;cursor:crosshair}
 #loupe{position:absolute;width:140px;height:140px;border-radius:50%;pointer-events:none;box-shadow:0 6px 22px rgba(0,0,0,.35);border:3px solid var(--surface);z-index:5}
 .keypad{display:flex;gap:6px;flex-wrap:wrap}
+.keypad button{padding:0 10px}
+.arow{margin-bottom:6px}
+.arow input,.arow select{border:1px solid var(--line);background:var(--surface);border-radius:8px;padding:8px 10px}
+.arow input{flex:1;min-width:130px}
+.pick{margin-bottom:10px}
+.pick .btn[aria-pressed="true"],.sizes .btn[aria-pressed="true"]{border-color:var(--accent);box-shadow:0 0 0 1px var(--accent);font-weight:600}
 .keypad button{min-width:42px;height:40px;border-radius:8px;border:1px solid rgba(0,0,0,.15);font-family:var(--f-display);font-weight:700;font-size:19px}
 .sess-head{display:flex;justify-content:space-between;gap:10px;align-items:flex-start;flex-wrap:wrap;margin-bottom:12px}
 .sess-head h2{margin:0}
@@ -159,6 +165,7 @@ table.card td.c{font-family:var(--f-display);font-size:17px;font-weight:700}
     <div id="shoot" hidden>
       <div class="shoot">
         <div class="tgt">
+          <div class="row sizes" id="sizes" hidden></div>
           <div class="tgtwrap" id="tgtwrap"><canvas id="face" aria-label="Blason : touche ou clique pour placer une flèche"></canvas><canvas id="loupe" hidden></canvas></div>
           <div class="keypad" id="keypad" aria-label="Saisie rapide sans position"></div>
           <div class="row">
@@ -169,6 +176,7 @@ table.card td.c{font-family:var(--f-display);font-size:17px;font-weight:700}
         <div>
           <div class="panel">
             <div class="sess-head"><div><div class="label" id="sMeta"></div><h2 id="sName"></h2></div><div class="label num" id="sEndNo"></div></div>
+            <div class="row pick" id="archTabs" hidden></div>
             <div class="end" id="endChips"></div>
             <div class="row" style="margin-top:12px"><button class="btn primary" id="validate">Valider la volée</button><span class="muted" id="hint" style="font-size:13px"></span></div>
             <div class="big" id="bigStats"></div>
@@ -207,14 +215,38 @@ const FACES={
   reduced80:{label:"80 cm réduit (5–10)",kind:"rings",w:4,minScore:5,arrowR:.3,spots:[[0,0]],bounds:[-27,-27,27,27],paper:[-25.5,-25.5,25.5,25.5]},
   full80:{label:"80 cm",kind:"rings",w:4,minScore:1,arrowR:.3,spots:[[0,0]],bounds:[-43,-43,43,43],paper:[-41.5,-41.5,41.5,41.5]},
   full122:{label:"122 cm",kind:"rings",w:6.1,minScore:1,arrowR:.3,spots:[[0,0]],bounds:[-64,-64,64,64],paper:[-62.5,-62.5,62.5,62.5]},
-  animal3d:{label:"Cible 3D",kind:"3d",arrowR:.3,spots:[[-11,4]],bounds:[-38,-23,35,28]}
+  animal3d:{label:"Cible 3D",kind:"3d",arrowR:.3,spots:[[-11,4]],bounds:[-38,-23,35,28]},
+  nature:{label:"Blason nature",kind:"nature",arrowR:.3,spots:[[-10,3]],bounds:[-38,-23,35,28]}
 };
+/* Campagne : blason noir à spot jaune, zones 6 à 1, taille choisie à chaque cible */
+const FIELD={};[20,40,60,80].forEach(d=>{const h=d/2+3;FIELD[d]={label:"Campagne "+d+" cm",kind:"field",d,w:d/10,arrowR:.3,spots:[[0,0]],bounds:[-h,-h,h,h],paper:[-h+1.5,-h+1.5,h-1.5,h-1.5]}});
+FACES.field={...FIELD[80],label:"Campagne (20 à 80 cm)"};
+const NAT=[[20,15],[15,10]]; // [1re flèche, flèches suivantes] × [zone tuée, zone blessée]
+const natPts=(z,i)=>NAT[Math.min(i,1)][z==="t"?0:1];
+const byTarget=f=>f.kind!=="rings";                 // on compte en cibles et non en volées
+const animal=f=>f.kind==="3d"||f.kind==="nature";
+const maxArrow=f=>f.kind==="3d"?11:f.kind==="field"?6:f.kind==="nature"?20:10;
+const maxEnd=(f,n)=>!n?0:f.kind==="nature"?20+15*(n-1):n*maxArrow(f);
+const shootFace=s=>FACES[s.face].kind==="field"?FIELD[s.pd||40]:FACES[s.face];
+function rescore(s,arr){const f=shootFace(s);
+  arr.forEach((a,i)=>{ if(f.kind==="nature"){ if(a.z) a.s=natPts(a.z,i) }
+    else if(f.kind==="field"&&a.x!=null){ const r=scoreAt(f,s.bow,a.x,a.y,i); a.s=r.s; if(r.m) a.m=true; else delete a.m } });
+  return arr}
+/* Deux compteurs mis en avant selon la discipline */
+function tops(f,a){
+  if(f.kind==="3d") return [["11",a.filter(x=>x.s===11).length],["10 et +",a.filter(x=>x.s>=10).length]];
+  if(f.kind==="field") return [["6",a.filter(x=>x.s===6).length],["5 et 6",a.filter(x=>x.s>=5).length]];
+  if(f.kind==="nature") return [["Tuées",a.filter(x=>x.z==="t").length],["Blessées",a.filter(x=>x.z==="b").length]];
+  return [["X",a.filter(x=>x.X).length],["10 et X",a.filter(x=>x.s>=10).length]];
+}
 const RING={1:["#F8F8F4","#1A1A1A","#111"],2:["#F8F8F4","#1A1A1A","#111"],3:["#1E1E1E","#E4E4E4","#fff"],4:["#1E1E1E","#E4E4E4","#fff"],
   5:["#28A3E5","#1A1A1A","#0B1B2A"],6:["#28A3E5","#1A1A1A","#0B1B2A"],7:["#E8343A","#1A1A1A","#fff"],8:["#E8343A","#1A1A1A","#fff"],
   9:["#FFE047","#1A1A1A","#2A2200"],10:["#FFE047","#1A1A1A","#2A2200"]};
 function chipColors(face,a){
   if(a.m) return ["#8A928C","#fff"];
   if(face.kind==="3d") return a.s>=10?["#FFE047","#2A2200"]:a.s===8?["#E8343A","#fff"]:["#28A3E5","#0B1B2A"];
+  if(face.kind==="field") return a.s>=5?["#FFE047","#2A2200"]:["#1E1E1E","#fff"];
+  if(face.kind==="nature") return a.z==="t"?["#E8343A","#fff"]:["#28A3E5","#0B1B2A"];
   const r=RING[a.s]||RING[1]; return [r[0],r[2]];
 }
 const lab=a=>a.m?"M":(a.X?"X":String(a.s));
@@ -224,7 +256,17 @@ const A3D={body:[{cx:2,cy:2,rx:26,ry:14,rot:0},{cx:-19,cy:-5,rx:9,ry:5.5,rot:-.7
   legs:[[-17,10,4.5,16],[-8,12,4,14],[14,10,4.5,16],[22,9,4,15]],vital:{cx:-10,cy:3,rx:8,ry:7},c10:{cx:-11,cy:4,r:4},c11:{cx:-11,cy:4,r:1.6}};
 function inEll(e,x,y,pad=0){const dx=x-e.cx,dy=y-e.cy,c=Math.cos(-e.rot||0),s=Math.sin(-e.rot||0);const u=dx*c-dy*s,v=dx*s+dy*c;return (u*u)/((e.rx+pad)**2)+(v*v)/((e.ry+pad)**2)<=1}
 
-function scoreAt(face,bow,x,y){
+function scoreAt(face,bow,x,y,i=0){
+  if(face.kind==="nature"){
+    const r=face.arrowR;
+    if(inEll({...A3D.vital,rot:0},x,y,r)) return {s:natPts("t",i),z:"t",spot:0};
+    if(A3D.body.some(e=>inEll(e,x,y,r))||A3D.legs.some(([lx,ly,w,h])=>x>=lx-r&&x<=lx+w+r&&y>=ly-r&&y<=ly+h+r)) return {s:natPts("b",i),z:"b",spot:0};
+    return {s:0,m:true,spot:0};
+  }
+  if(face.kind==="field"){
+    const d=Math.max(0,Math.hypot(x,y)-face.arrowR), sc=d<=face.w/2?6:6-Math.ceil(d/face.w);
+    return sc<1?{s:0,m:true,spot:0}:{s:sc,spot:0};
+  }
   if(face.kind==="3d"){
     const r=face.arrowR, d=Math.hypot(x-A3D.c11.cx,y-A3D.c11.cy);
     if(d<=A3D.c11.r+r) return {s:11,spot:0};
@@ -246,17 +288,26 @@ function drawFace(ctx,face,k,ox,oy,only){
   const P=(x,y)=>[ox+x*k,oy+y*k];
   const [x1,y1,x2,y2]=only?only.bounds:face.bounds;
   ctx.fillStyle=cssv("--butte"); ctx.fillRect(ox+x1*k,oy+y1*k,(x2-x1)*k,(y2-y1)*k);
-  if(face.kind==="3d"){
+  if(animal(face)){
     ctx.fillStyle="#8B6B47"; ctx.strokeStyle="rgba(40,26,12,.55)"; ctx.lineWidth=Math.max(.8,.12*k);
     A3D.legs.forEach(([lx,ly,w,h])=>{const [a,b]=P(lx,ly);ctx.beginPath();ctx.roundRect?ctx.roundRect(a,b,w*k,h*k,1.5*k):ctx.rect(a,b,w*k,h*k);ctx.fill()});
     A3D.body.forEach(e=>{const [a,b]=P(e.cx,e.cy);ctx.beginPath();ctx.ellipse(a,b,e.rx*k,e.ry*k,e.rot,0,Math.PI*2);ctx.fill()});
     const v=A3D.vital,[va,vb]=P(v.cx,v.cy);ctx.beginPath();ctx.ellipse(va,vb,v.rx*k,v.ry*k,0,0,Math.PI*2);ctx.fillStyle="#97795A";ctx.fill();ctx.stroke();
-    [A3D.c10,A3D.c11].forEach(c=>{const [a,b]=P(c.cx,c.cy);ctx.beginPath();ctx.arc(a,b,c.r*k,0,Math.PI*2);ctx.stroke()});
+    if(face.kind==="3d") [A3D.c10,A3D.c11].forEach(c=>{const [a,b]=P(c.cx,c.cy);ctx.beginPath();ctx.arc(a,b,c.r*k,0,Math.PI*2);ctx.stroke()});
     const [ea,eb]=P(-31,-14);ctx.fillStyle="#2b1d10";ctx.beginPath();ctx.arc(ea,eb,Math.max(1.5,.7*k),0,Math.PI*2);ctx.fill();
     return;
   }
   const pp=only?only.paper:face.paper;
   ctx.fillStyle="#F3F1EA"; ctx.fillRect(ox+pp[0]*k,oy+pp[1]*k,(pp[2]-pp[0])*k,(pp[3]-pp[1])*k);
+  if(face.kind==="field"){
+    const [a,b]=P(0,0), w=face.w;
+    for(let sc=1;sc<=6;sc++){
+      ctx.beginPath();ctx.arc(a,b,(sc===6?w/2:(6-sc)*w)*k,0,Math.PI*2);ctx.fillStyle=sc>=5?"#FFE047":"#1E1E1E";ctx.fill();
+      ctx.lineWidth=Math.max(.6,.05*k);ctx.strokeStyle=sc>=5?"#1A1A1A":"#E4E4E4";ctx.stroke();
+    }
+    const q=Math.max(2,.12*w*k);ctx.beginPath();ctx.moveTo(a-q,b);ctx.lineTo(a+q,b);ctx.moveTo(a,b-q);ctx.lineTo(a,b+q);ctx.lineWidth=Math.max(.5,.03*k);ctx.strokeStyle="#333";ctx.stroke();
+    return;
+  }
   const spots=only?[[0,0]]:face.spots;
   spots.forEach(([cx,cy])=>{
     const [a,b]=P(cx,cy);
@@ -336,12 +387,32 @@ const PRESETS={
   ext50:{name:"Extérieur 50 m",sub:"80 cm réduit · 12 × 6",face:"reduced80",dist:50,ends:12,arrows:6},
   ext70:{name:"Extérieur 70 m",sub:"122 cm · 12 × 6",face:"full122",dist:70,ends:12,arrows:6},
   ext30:{name:"Extérieur 30 m",sub:"80 cm · 12 × 6",face:"full80",dist:30,ends:12,arrows:6},
-  p3d:{name:"Parcours 3D",sub:"24 cibles × 2 flèches",face:"animal3d",dist:"",ends:24,arrows:2}
+  p3d:{name:"Parcours 3D",sub:"24 cibles × 2 flèches",face:"animal3d",dist:"",ends:24,arrows:2},
+  campagne:{name:"Tir campagne",sub:"24 cibles × 3 flèches",face:"field",dist:"",ends:24,arrows:3},
+  nature:{name:"Tir nature",sub:"21 cibles × 2 flèches",face:"nature",dist:"",ends:21,arrows:2}
 };
 const getCur=()=>curId?Store.map.get(curId):null;
+/* Archers : le premier est la séance elle-même, les suivants sont dans s.arch */
+const BOWS=[["poulies","Arc à poulies"],["classique","Arc classique"],["nu","Arc nu"]];
+const archers=s=>[s,...(s.arch||[])];
+const arOf=(s,i)=>archers(s)[i]||s;
+const curAr=()=>{const s=getCur();return s?arOf(s,s.ai||0):null};
+const whoName=(s,i)=>(arOf(s,i).who||"").trim()||"Archer "+(i+1);
+let archDraft=[{who:"",bow:""}], detailA=0;
+try{const d=JSON.parse(localStorage.getItem("cdt.archers")||"null");if(Array.isArray(d)&&d.length)archDraft=d.slice(0,4).map(x=>({who:String(x.who||""),bow:String(x.bow||"")}))}catch(e){}
+/* Trispot : plusieurs flèches dans le même spot, seule la moins bonne compte (les autres valent M) */
+function sameSpot(face,arr){
+  if(!(face.spots&&face.spots.length>1)) return false;
+  arr.forEach(a=>{if(a.dup){a.s=a.o;if(a.oX)a.X=true;delete a.m;delete a.dup;delete a.o;delete a.oX}});
+  const g={};arr.forEach(a=>{if(a.x!=null&&!a.m)(g[a.spot||0]=g[a.spot||0]||[]).push(a)});
+  let any=false;
+  Object.values(g).forEach(l=>{if(l.length<2)return;const keep=l.reduce((b,a)=>a.s<b.s?a:b);
+    l.forEach(a=>{if(a===keep)return;a.o=a.s;if(a.X){a.oX=true;delete a.X}a.s=0;a.m=true;a.dup=true;any=true})});
+  return any}
 function allArrows(s,withPending=true){const a=[];(s.ends||[]).forEach(e=>a.push(...e.a));if(withPending&&s.pending)a.push(...s.pending);return a}
-function stats(s){const a=allArrows(s),t=a.reduce((n,x)=>n+(x.s||0),0),max=FACES[s.face].kind==="3d"?11:10;
-  return {n:a.length,total:t,avg:a.length?t/a.length:0,X:a.filter(x=>x.X).length,tens:a.filter(x=>x.s>=10).length,max:s.ends.length?0:0,maxTotal:s.endsPlanned*s.arrowsPerEnd*max}}
+function stats(s,r=s){const a=allArrows(r),t=a.reduce((n,x)=>n+(x.s||0),0),f=FACES[s.face];
+  const shot=(r.ends||[]).reduce((n,e)=>n+maxEnd(f,e.a.length),0)+maxEnd(f,(r.pending||[]).length);
+  return {n:a.length,total:t,avg:a.length?t/a.length:0,X:a.filter(x=>x.X).length,tens:a.filter(x=>x.s>=10).length,shot,maxTotal:s.endsPlanned*maxEnd(f,s.arrowsPerEnd)}}
 
 /* ---------- Toast ---------- */
 let tt;function toast(m){const t=$("#toast");t.textContent=m;t.hidden=false;clearTimeout(tt);tt=setTimeout(()=>t.hidden=true,2800)}
@@ -360,7 +431,7 @@ function renderAll(){
 }
 
 /* ---------- Préparation ---------- */
-function presetIcon(face){const c=document.createElement("canvas");renderFace(c,FACES[face],[],face==="trispot40"?20:46,46);return c}
+function presetIcon(face){const c=document.createElement("canvas");renderFace(c,face==="field"?FIELD[20]:FACES[face],[],face==="trispot40"?20:46,46);return c}
 function renderSetup(){
   const el=$("#setup"), p=PRESETS[preset];
   const live=sessions.filter(s=>s.status==="en cours");
@@ -374,17 +445,28 @@ function renderSetup(){
       <label class="field"><span class="label">Arc</span><select id="fBow"><option value="poulies">Arc à poulies</option><option value="classique">Arc classique</option><option value="nu">Arc nu</option></select></label>
       <label class="field"><span class="label">Blason</span><select id="fFace">${Object.entries(FACES).map(([k,f])=>`<option value="${k}" ${k===p.face?"selected":""}>${f.label}</option>`).join("")}</select></label>
       <label class="field"><span class="label">Distance (m)</span><input id="fDist" type="number" min="0" inputmode="numeric" value="${p.dist}"></label>
-      <label class="field"><span class="label" id="lEnds">${p.face==="animal3d"?"Cibles":"Volées"}</span><input id="fEnds" type="number" min="1" max="99" inputmode="numeric" value="${p.ends}"></label>
-      <label class="field"><span class="label">Flèches par ${p.face==="animal3d"?"cible":"volée"}</span><input id="fArr" type="number" min="1" max="12" inputmode="numeric" value="${p.arrows}"></label>
+      <label class="field"><span class="label" id="lEnds">${byTarget(FACES[p.face])?"Cibles":"Volées"}</span><input id="fEnds" type="number" min="1" max="99" inputmode="numeric" value="${p.ends}"></label>
+      <label class="field"><span class="label" id="lArr">Flèches par ${byTarget(FACES[p.face])?"cible":"volée"}</span><input id="fArr" type="number" min="1" max="12" inputmode="numeric" value="${p.arrows}"></label>
     </div>
+    <div id="archBox"></div>
     <div class="row"><button class="btn primary" id="start">Commencer la séance</button>${sessions.length?"":`<button class="btn" id="demo">Charger des séances d'exemple</button>`}</div>`;
   el.querySelectorAll("[data-icon]").forEach(s=>s.replaceWith(presetIcon(s.dataset.icon)));
   try{const b=localStorage.getItem("cdt.bow");if(b)$("#fBow").value=b}catch(e){}
   el.querySelectorAll("[data-p]").forEach(b=>b.onclick=()=>{preset=b.dataset.p;renderSetup()});
   el.querySelectorAll("[data-resume]").forEach(b=>b.onclick=()=>resume(b.dataset.resume));
-  $("#fFace").onchange=e=>{const is3=e.target.value==="animal3d";$("#lEnds").textContent=is3?"Cibles":"Volées"};
+  $("#fFace").onchange=e=>{const is3=byTarget(FACES[e.target.value]);$("#lEnds").textContent=is3?"Cibles":"Volées";$("#lArr").textContent="Flèches par "+(is3?"cible":"volée")};
   $("#start").onclick=startSession;
   const d=$("#demo"); if(d) d.onclick=loadDemo;
+  renderArch();
+}
+function readArch(){document.querySelectorAll("#archBox [data-an]").forEach(e=>{const d=archDraft[+e.dataset.an];if(d)d.who=e.value.trim()});
+  document.querySelectorAll("#archBox [data-ab]").forEach(e=>{const d=archDraft[+e.dataset.ab];if(d)d.bow=e.value})}
+function renderArch(){
+  const el=$("#archBox"); if(!el) return;
+  el.innerHTML=`<h3>Archers</h3>${archDraft.map((d,i)=>`<div class="row arow"><input data-an="${i}" value="${esc(d.who)}" placeholder="${i?"Archer "+(i+1):"Ton nom (facultatif)"}" aria-label="Nom de l'archer ${i+1}">${i?`<select data-ab="${i}" aria-label="Arc de l'archer ${i+1}">${BOWS.map(([k,l])=>`<option value="${k}" ${k===d.bow?"selected":""}>${l}</option>`).join("")}</select><button class="btn small" data-rm="${i}">Retirer</button>`:""}</div>`).join("")}
+    <div class="row" style="margin:8px 0 16px">${archDraft.length<4?`<button class="btn small" id="addA">Ajouter un archer</button>`:""}<span class="muted" style="font-size:13px">Jusqu'à 4 archers sur la même feuille. Les statistiques suivent le premier.</span></div>`;
+  const add=$("#addA"); if(add) add.onclick=()=>{readArch();archDraft.push({who:"",bow:$("#fBow").value});renderArch()};
+  el.querySelectorAll("[data-rm]").forEach(b=>b.onclick=()=>{readArch();archDraft.splice(+b.dataset.rm,1);renderArch()});
 }
 function startSession(){
   const n=v=>Math.max(1,Math.min(99,parseInt(v,10)||1));
@@ -392,23 +474,27 @@ function startSession(){
   const s={id:uid(),name:$("#fName").value.trim()||"Entraînement",date:$("#fDate").value||today(),createdAt:Date.now(),
     face:$("#fFace").value,bow,distance:$("#fDist").value,endsPlanned:n($("#fEnds").value),arrowsPerEnd:Math.min(12,n($("#fArr").value)),
     ends:[],pending:[],status:"en cours"};
+  if(FACES[s.face].kind==="field") s.pd=40;
+  readArch(); try{localStorage.setItem("cdt.archers",JSON.stringify(archDraft))}catch(e){}
+  if(archDraft[0].who) s.who=archDraft[0].who;
+  if(archDraft.length>1) s.arch=archDraft.slice(1).map(d=>({who:d.who,bow:d.bow||bow,ends:[],pending:[]}));
   curId=s.id;endArrows=[];Store.put(s,0);requestAnimationFrame(layoutFace);
 }
-function resume(id){const s=Store.map.get(id);if(!s)return;curId=id;endArrows=(s.pending||[]).slice();setTab("seance");closeDetail();requestAnimationFrame(layoutFace)}
+function resume(id){const s=Store.map.get(id);if(!s)return;curId=id;endArrows=(arOf(s,s.ai||0).pending||[]).slice();setTab("seance");closeDetail();requestAnimationFrame(layoutFace)}
 
 /* ---------- Tir ---------- */
 const cv=$("#face"), loupe=$("#loupe"); let T=null, aiming=false;
 function layoutFace(){
   const s=getCur(); if(!s||$("#shoot").hidden) return;
-  const face=FACES[s.face], wrap=$("#tgtwrap"), availW=wrap.clientWidth-20;
+  const face=shootFace(s), wrap=$("#tgtwrap"), availW=wrap.clientWidth-20;
   const maxH=Math.min(window.innerHeight*.74,760);
   T={face,s};
   drawShootFace(availW,maxH);
 }
 function drawShootFace(availW,maxH){
-  const s=getCur(); if(!s) return; const face=FACES[s.face];
+  const s=getCur(); if(!s) return; const face=shootFace(s);
   if(availW==null){availW=$("#tgtwrap").clientWidth-20;maxH=Math.min(window.innerHeight*.74,760)}
-  const prev=$("#showPrev").checked?allArrows(s,false):[];
+  const prev=$("#showPrev").checked&&face.kind!=="field"?allArrows(curAr(),false):[];
   const g=renderFace(cv,face,prev,availW,maxH,{after:(ctx,k,ox,oy)=>{
     endArrows.forEach((a,i)=>{ if(a.x==null) return; dot(ctx,ox+a.x*k,oy+a.y*k,8,"#0E3B8A","#fff",String(i+1)) });
   }});
@@ -426,7 +512,7 @@ function showLoupe(p){
   c.setTransform(dpr,0,0,dpr,0,0);
   c.strokeStyle="#fff";c.lineWidth=2.5;c.beginPath();c.moveTo(L/2-14,L/2);c.lineTo(L/2+14,L/2);c.moveTo(L/2,L/2-14);c.lineTo(L/2,L/2+14);c.stroke();
   c.strokeStyle="#000";c.lineWidth=1;c.stroke();
-  const sc=scoreAt(T.face,s.bow,p.x,p.y),[bg,fg]=chipColors(T.face,sc);
+  const sc=scoreAt(T.face,curAr().bow,p.x,p.y,endArrows.length),[bg,fg]=chipColors(T.face,sc);
   c.beginPath();c.arc(L/2,L-22,14,0,Math.PI*2);c.fillStyle=bg;c.fill();c.strokeStyle="rgba(0,0,0,.4)";c.stroke();
   c.fillStyle=fg;c.font='700 17px "Barlow Condensed",sans-serif';c.textAlign="center";c.textBaseline="middle";c.fillText(lab(sc),L/2,L-21.5);
   let top=cv.offsetTop+p.py-L-34; if(top<-30) top=cv.offsetTop+p.py+34;
@@ -435,56 +521,73 @@ function showLoupe(p){
 cv.addEventListener("pointerdown",e=>{if(!getCur()||!T)return;e.preventDefault();aiming=true;try{cv.setPointerCapture(e.pointerId)}catch(_){};showLoupe(toWorld(e))});
 cv.addEventListener("pointermove",e=>{if(aiming)showLoupe(toWorld(e))});
 cv.addEventListener("pointerup",e=>{if(!aiming)return;aiming=false;loupe.hidden=true;const p=toWorld(e),s=getCur();
-  const sc=scoreAt(T.face,s.bow,p.x,p.y);addArrow({x:+p.x.toFixed(2),y:+p.y.toFixed(2),...sc})});
+  const sc=scoreAt(T.face,curAr().bow,p.x,p.y,endArrows.length);addArrow({x:+p.x.toFixed(2),y:+p.y.toFixed(2),...sc})});
 cv.addEventListener("pointercancel",()=>{aiming=false;loupe.hidden=true});
 window.addEventListener("resize",()=>{clearTimeout(window.__rz);window.__rz=setTimeout(layoutFace,120)});
 matchMedia("(prefers-color-scheme: dark)").addEventListener?.("change",()=>renderAll());
 new MutationObserver(()=>renderAll()).observe(document.documentElement,{attributes:true,attributeFilter:["data-theme"]});
 
+const mkEnd=(s,arr)=>FACES[s.face].kind==="field"?{a:arr.slice(),d:s.pd||40}:{a:arr.slice()};
 function addArrow(a){
   const s=getCur(); if(!s) return;
+  if(curAr().ends.length>=s.endsPlanned){toast("Cet archer a terminé sa séance.");return}
   if(endArrows.length>=s.arrowsPerEnd){toast("Volée complète : valide-la pour continuer.");return}
   Object.keys(a).forEach(k=>a[k]===undefined||a[k]===false?delete a[k]:0);
-  endArrows.push(a); s.pending=endArrows.slice(); Store.put(s,900);
+  endArrows.push(a);
+  if(sameSpot(shootFace(s),endArrows)) toast("Deux flèches dans le même spot : seule la moins bonne compte.");
+  curAr().pending=endArrows.slice(); Store.put(s,900);
 }
 $("#undo").onclick=()=>{const s=getCur();if(!s)return;
-  if(endArrows.length){endArrows.pop()} else if(s.ends.length){endArrows=s.ends.pop().a.slice();endArrows.pop();s.status="en cours"} else return;
-  s.pending=endArrows.slice();Store.put(s,600)};
+  const a=curAr();
+  if(endArrows.length){endArrows.pop()} else if(a.ends.length){const e=a.ends.pop();if(e.d)s.pd=e.d;endArrows=e.a.slice();endArrows.pop();s.status="en cours"} else return;
+  sameSpot(shootFace(s),endArrows);a.pending=endArrows.slice();Store.put(s,600)};
 $("#validate").onclick=()=>{const s=getCur();if(!s||!endArrows.length)return;
-  s.ends.push({a:endArrows.slice()});endArrows=[];s.pending=[];
-  if(s.ends.length>=s.endsPlanned){s.status="terminée";const st=stats(s);toast(`Séance terminée : ${st.total} points, ${fr(st.avg)} par flèche.`);curId=null;detailId=s.id}
+  const a=curAr(), all=archers(s); a.ends.push(mkEnd(s,endArrows));endArrows=[];a.pending=[];
+  if(all.every(r=>r.ends.length>=s.endsPlanned)){s.status="terminée";const st=stats(s);toast(all.length>1?"Séance terminée.":`Séance terminée : ${st.total} points, ${fr(st.avg)} par flèche.`);curId=null;detailId=s.id}
+  else if(all.length>1){ // passe à l'archer suivant qui a le moins de volées
+    const mn=Math.min(...all.map(r=>r.ends.length)), i0=s.ai||0;
+    for(let j=1;j<=all.length;j++){const i=(i0+j)%all.length;if(all[i].ends.length===mn){s.ai=i;break}}
+    endArrows=(arOf(s,s.ai||0).pending||[]).slice() }
   Store.put(s,0); if(!curId) openDetail(s.id)};
-$("#finish").onclick=()=>{const s=getCur();if(!s)return;if(endArrows.length){s.ends.push({a:endArrows.slice()})}
-  endArrows=[];s.pending=[];s.status="terminée";s.endsPlanned=Math.max(s.ends.length,1);curId=null;Store.put(s,0);openDetail(s.id)};
-$("#leave").onclick=()=>{const s=getCur();if(s){s.pending=endArrows.slice();Store.put(s,0)}curId=null;endArrows=[];renderAll()};
+$("#finish").onclick=()=>{const s=getCur();if(!s)return;curAr().pending=endArrows.slice();
+  archers(s).forEach(r=>{if(r.pending&&r.pending.length)r.ends.push(mkEnd(s,r.pending));r.pending=[]});
+  endArrows=[];s.status="terminée";s.endsPlanned=Math.max(1,...archers(s).map(r=>r.ends.length));curId=null;Store.put(s,0);openDetail(s.id)};
+$("#leave").onclick=()=>{const s=getCur();if(s){curAr().pending=endArrows.slice();Store.put(s,0)}curId=null;endArrows=[];renderAll()};
 $("#showPrev").onchange=()=>drawShootFace();
 
 function renderShoot(){
-  const s=getCur(), face=FACES[s.face], is3=face.kind==="3d", st=stats(s), unit=is3?"Cible":"Volée";
+  const s=getCur(), a=curAr(), face=shootFace(s), is3=byTarget(face), st=stats(s,a), unit=is3?"Cible":"Volée", tp=tops(face,allArrows(a));
   $("#sName").textContent=s.name;
-  $("#sMeta").textContent=[fdate(s.date),face.label,s.distance?s.distance+" m":"",{poulies:"Arc à poulies",classique:"Arc classique",nu:"Arc nu"}[s.bow]].filter(Boolean).join(" · ");
-  $("#sEndNo").textContent=`${unit} ${Math.min(s.ends.length+1,s.endsPlanned)} / ${s.endsPlanned}`;
+  const all=archers(s), at=$("#archTabs"); at.hidden=all.length<2;
+  if(all.length>1){ at.innerHTML=all.map((r,i)=>`<button class="btn small" data-a="${i}" aria-pressed="${r===a}">${esc(whoName(s,i))} <b class="num">${stats(s,r).total}</b></button>`).join("");
+    at.querySelectorAll("[data-a]").forEach(b=>b.onclick=()=>{a.pending=endArrows.slice();s.ai=+b.dataset.a;endArrows=(arOf(s,s.ai).pending||[]).slice();Store.put(s,300)}); }
+  $("#sMeta").textContent=[fdate(s.date),FACES[s.face].label,s.distance?s.distance+" m":"",{poulies:"Arc à poulies",classique:"Arc classique",nu:"Arc nu"}[a.bow]].filter(Boolean).join(" · ");
+  $("#sEndNo").textContent=`${unit} ${Math.min(a.ends.length+1,s.endsPlanned)} / ${s.endsPlanned}`;
   const sorted=endArrows.map((a,i)=>({a,i})).sort((p,q)=>(q.a.s-p.a.s)||((q.a.X?1:0)-(p.a.X?1:0)));
   const endTot=endArrows.reduce((n,a)=>n+a.s,0);
   $("#endChips").innerHTML=sorted.map(({a,i})=>{const [bg,fg]=chipColors(face,a);return `<button class="chip" style="background:${bg};color:${fg}" data-del="${i}" title="Retirer cette flèche" aria-label="Retirer la flèche ${i+1} (${lab(a)})">${lab(a)}</button>`}).join("")
     +Array.from({length:Math.max(0,s.arrowsPerEnd-endArrows.length)},()=>`<span class="slot"></span>`).join("")
     +`<span class="endtotal num">${endTot}</span>`;
-  $("#endChips").querySelectorAll("[data-del]").forEach(b=>b.onclick=()=>{endArrows.splice(+b.dataset.del,1);s.pending=endArrows.slice();Store.put(s,900)});
+  $("#endChips").querySelectorAll("[data-del]").forEach(b=>b.onclick=()=>{endArrows.splice(+b.dataset.del,1);rescore(s,endArrows);sameSpot(face,endArrows);a.pending=endArrows.slice();Store.put(s,900)});
   const full=endArrows.length>=s.arrowsPerEnd;
   $("#validate").disabled=!endArrows.length; $("#validate").textContent=`Valider la ${unit.toLowerCase()}`;
   $("#hint").textContent=full?"":`Touche le blason (maintiens pour la loupe) ou utilise les boutons.`;
-  $("#bigStats").innerHTML=`<div><span class="label">Total</span><b class="num">${st.total}</b></div><div><span class="label">Moy./flèche</span><b class="num">${fr(st.avg)}</b></div><div><span class="label">${is3?"11":"X"}</span><b class="num">${is3?allArrows(s).filter(a=>a.s===11).length:st.X}</b></div><div><span class="label">${is3?"10 et +":"10 et X"}</span><b class="num">${st.tens}</b></div>`;
-  $("#scorecard").innerHTML=scorecard(s,true);
-  const keys=is3?[11,10,8,5]:[...(face.indoor&&s.bow==="poulies"?[]:["X"]),...Array.from({length:11-face.minScore},(_,i)=>10-i)];
-  $("#keypad").innerHTML=keys.map(k=>{const a=k==="X"?{s:10,X:true}:{s:k};const [bg,fg]=chipColors(face,a);return `<button style="background:${bg};color:${fg}" data-k="${k}">${k}</button>`}).join("")+`<button style="background:#8A928C;color:#fff" data-k="M">M</button>`;
-  $("#keypad").querySelectorAll("[data-k]").forEach(b=>b.onclick=()=>{const k=b.dataset.k;addArrow(k==="M"?{s:0,m:true}:k==="X"?{s:10,X:true}:{s:+k})});
+  $("#bigStats").innerHTML=`<div><span class="label">Total</span><b class="num">${st.total}</b></div><div><span class="label">Moy./flèche</span><b class="num">${fr(st.avg)}</b></div><div><span class="label">${tp[0][0]}</span><b class="num">${tp[0][1]}</b></div><div><span class="label">${tp[1][0]}</span><b class="num">${tp[1][1]}</b></div>`;
+  $("#scorecard").innerHTML=scorecard(s,a);
+  const ni=endArrows.length;
+  const sizes=$("#sizes"); sizes.hidden=face.kind!=="field";
+  if(face.kind==="field"){ sizes.innerHTML=`<span class="label">Blason de cette cible</span>`+[20,40,60,80].map(d=>`<button class="btn small" data-d="${d}" aria-pressed="${d===face.d}">${d} cm</button>`).join("");
+    sizes.querySelectorAll("[data-d]").forEach(b=>b.onclick=()=>{s.pd=+b.dataset.d;rescore(s,endArrows);a.pending=endArrows.slice();archers(s).forEach(r=>{if(r!==a&&r.pending)rescore(s,r.pending)});Store.put(s,600)}); }
+  const keys=face.kind==="nature"?["t","b"]:face.kind==="field"?[6,5,4,3,2,1]:face.kind==="3d"?[11,10,8,5]:[...(face.indoor&&a.bow==="poulies"?[]:["X"]),...Array.from({length:11-face.minScore},(_,i)=>10-i)];
+  $("#keypad").innerHTML=keys.map(k=>{const a=k==="X"?{s:10,X:true}:face.kind==="nature"?{s:natPts(k,ni),z:k}:{s:k};const [bg,fg]=chipColors(face,a);return `<button style="background:${bg};color:${fg}" data-k="${k}">${face.kind==="nature"?(k==="t"?"Tuée ":"Blessée ")+a.s:k}</button>`}).join("")+`<button style="background:#8A928C;color:#fff" data-k="M">M</button>`;
+  $("#keypad").querySelectorAll("[data-k]").forEach(b=>b.onclick=()=>{const k=b.dataset.k;addArrow(k==="M"?{s:0,m:true}:k==="X"?{s:10,X:true}:face.kind==="nature"?{s:natPts(k,ni),z:k}:{s:+k})});
   if(!T||T.s?.id!==s.id||T.face!==face) requestAnimationFrame(layoutFace); else drawShootFace();
 }
-function scorecard(s,withPending){
-  const face=FACES[s.face], unit=face.kind==="3d"?"Cible":"Volée", n=s.arrowsPerEnd;
-  let cum=0; const rows=(s.ends||[]).map((e,i)=>{const t=e.a.reduce((x,a)=>x+a.s,0);cum+=t;
+function scorecard(s,r=s){
+  const face=FACES[s.face], unit=byTarget(face)?"Cible":"Volée", n=s.arrowsPerEnd;
+  let cum=0; const rows=(r.ends||[]).map((e,i)=>{const t=e.a.reduce((x,a)=>x+a.s,0);cum+=t;
     const ar=e.a.slice().sort((p,q)=>(q.s-p.s)||((q.X?1:0)-(p.X?1:0)));
-    return `<tr><td class="muted">${i+1}</td>${Array.from({length:n},(_,j)=>{const a=ar[j];if(!a)return "<td></td>";const [bg,fg]=chipColors(face,a);return `<td><span class="mini" style="background:${bg};color:${fg}">${lab(a)}</span></td>`}).join("")}<td class="t">${t}</td><td class="c">${cum}</td></tr>`});
+    return `<tr><td class="muted">${i+1}${e.d?` <small>${e.d}</small>`:""}</td>${Array.from({length:n},(_,j)=>{const a=ar[j];if(!a)return "<td></td>";const [bg,fg]=chipColors(face,a);return `<td><span class="mini" style="background:${bg};color:${fg}">${lab(a)}</span></td>`}).join("")}<td class="t">${t}</td><td class="c">${cum}</td></tr>`});
   if(!rows.length) return `<tr><td class="muted" style="text-align:left;padding:10px 4px">Aucune ${unit.toLowerCase()} validée pour l'instant.</td></tr>`;
   return `<thead><tr><th>${unit}</th>${Array.from({length:n},(_,j)=>`<th>${j+1}</th>`).join("")}<th>Tot.</th><th>Cumul</th></tr></thead><tbody>${rows.reverse().join("")}</tbody>`;
 }
@@ -498,8 +601,8 @@ function renderHistory(){
   <div class="hist">${sessions.map(s=>{const st=stats(s),f=FACES[s.face];const d=new Date(s.date+"T12:00:00");
     return `<button class="hrow" data-open="${s.id}"><div class="date"><b>${d.getDate()}</b>${d.toLocaleDateString("fr-FR",{month:"short"})}</div>
     <div style="min-width:0"><div class="nm">${esc(s.name)}${s.status==="en cours"?`<span class="pill live">en cours</span>`:""}${s.demo?`<span class="pill demo">exemple</span>`:""}</div>
-    <div class="meta">${f.label}${s.distance?" · "+s.distance+" m":""} · ${st.n} flèches · ${fr(st.avg)} / flèche</div></div>
-    <div class="sc num">${st.total}<small>/ ${st.n*(f.kind==="3d"?11:10)}</small></div></button>`}).join("")}</div>`;
+    <div class="meta">${f.label}${s.arch&&s.arch.length?" · "+(s.arch.length+1)+" archers":""}${s.distance?" · "+s.distance+" m":""} · ${st.n} flèches · ${fr(st.avg)} / flèche</div></div>
+    <div class="sc num">${st.total}<small>/ ${st.shot}</small></div></button>`}).join("")}</div>`;
   el.querySelectorAll("[data-open]").forEach(b=>b.onclick=()=>openDetail(b.dataset.open));
   el.querySelector("[data-backup]").onclick=openBackup;
   const cd=$("#clearDemo"); if(cd){let armed=false;cd.onclick=()=>{if(!armed){armed=true;cd.classList.add("armed");cd.textContent="Confirmer l'effacement";setTimeout(()=>{armed=false;cd.classList.remove("armed");cd.textContent="Effacer les exemples"},3500);return}
@@ -533,21 +636,25 @@ function openBackup(){
     closeDetail();toast(`${ok.length} séance${ok.length>1?"s":""} importée${ok.length>1?"s":""}.`)};
 }
 
-function openDetail(id){detailId=id;renderDetail()}
+function openDetail(id){detailId=id;detailA=0;renderDetail()}
 function closeDetail(){detailId=null;$("#overlay").hidden=true;$("#overlay").innerHTML=""}
 $("#overlay").addEventListener("click",e=>{if(e.target.id==="overlay")closeDetail()});
 document.addEventListener("keydown",e=>{if(e.key==="Escape"&&detailId)closeDetail()});
+window.androidBack=()=>{if(!$("#overlay").hidden){closeDetail();return true}return false}; // touche Retour d'Android
 function renderDetail(){
   const s=Store.map.get(detailId); if(!s){closeDetail();return}
-  const f=FACES[s.face],st=stats(s),ov=$("#overlay");ov.hidden=false;
+  const all=archers(s); if(detailA>=all.length) detailA=0;
+  const a=all[detailA],f=FACES[s.face],st=stats(s,a),ov=$("#overlay"),tp=tops(f,allArrows(a));ov.hidden=false;
   ov.innerHTML=`<div class="panel" role="dialog" aria-modal="true" aria-label="${esc(s.name)}">
     <div class="sess-head"><div><div class="label">${fdate(s.date,{weekday:"long",day:"numeric",month:"long",year:"numeric"})} · ${f.label}${s.distance?" · "+s.distance+" m":""}</div><h2>${esc(s.name)}</h2></div><button class="btn small" id="dClose">Fermer</button></div>
+    ${all.length>1?`<div class="row pick">${all.map((r,i)=>`<button class="btn small" data-da="${i}" aria-pressed="${i===detailA}">${esc(whoName(s,i))} <b class="num">${stats(s,r).total}</b></button>`).join("")}</div>`:""}
     <div class="detail"><canvas id="dFace"></canvas><div style="min-width:0">
-      <div class="big" style="margin-top:0"><div><span class="label">Total</span><b class="num">${st.total}</b></div><div><span class="label">Moy./flèche</span><b class="num">${fr(st.avg)}</b></div><div><span class="label">${f.kind==="3d"?"11":"X"}</span><b class="num">${f.kind==="3d"?allArrows(s).filter(a=>a.s===11).length:st.X}</b></div><div><span class="label">Flèches</span><b class="num">${st.n}</b></div></div>
-      <div class="tablewrap"><table class="card num">${scorecard(s)}</table></div>
+      <div class="big" style="margin-top:0"><div><span class="label">Total</span><b class="num">${st.total}</b></div><div><span class="label">Moy./flèche</span><b class="num">${fr(st.avg)}</b></div><div><span class="label">${tp[0][0]}</span><b class="num">${tp[0][1]}</b></div><div><span class="label">Flèches</span><b class="num">${st.n}</b></div></div>
+      <div class="tablewrap"><table class="card num">${scorecard(s,a)}</table></div>
     </div></div>
     <div class="row" style="margin-top:14px;justify-content:space-between">${s.status==="en cours"?`<button class="btn primary" id="dResume">Reprendre</button>`:"<span></span>"}<button class="btn danger" id="dDel">Supprimer la séance</button></div></div>`;
-  renderFace($("#dFace"),f,allArrows(s),Math.min(280,window.innerWidth-64),360);
+  ov.querySelectorAll("[data-da]").forEach(b=>b.onclick=()=>{detailA=+b.dataset.da;renderDetail()});
+  renderFace($("#dFace"),f,allArrows(a),Math.min(280,window.innerWidth-64),360);
   $("#dClose").onclick=closeDetail;
   const r=$("#dResume");if(r)r.onclick=()=>resume(s.id);
   const d=$("#dDel");let armed=false;d.onclick=()=>{if(!armed){armed=true;d.classList.add("armed");d.textContent="Confirmer la suppression";setTimeout(()=>{if(d.isConnected){armed=false;d.classList.remove("armed");d.textContent="Supprimer la séance"}},3500);return}
@@ -567,7 +674,8 @@ function renderStats(){
   if(statN!=="all") list=list.slice(-parseInt(statN,10));
   const arrows=list.flatMap(s=>allArrows(s)), n=arrows.length, tot=arrows.reduce((x,a)=>x+a.s,0);
   const fin=list.filter(s=>s.status==="terminée"), best=fin.length?fin.reduce((b,s)=>stats(s).total>stats(b).total?s:b):null;
-  const top=is3?arrows.filter(a=>a.s>=10).length:arrows.filter(a=>a.s===10).length;
+  const k=face.kind, top=arrows.filter(a=>k==="3d"?a.s>=10:k==="field"?a.s>=5:k==="nature"?a.z==="t":a.s===10).length;
+  const topLab=k==="3d"?"Taux 10 et 11":k==="field"?"Taux de 5 et 6":k==="nature"?"Taux de tuées":"Taux de 10";
   el.innerHTML=`<div class="row" style="justify-content:space-between;margin-bottom:12px"><h2 style="margin:0">Progression</h2><div class="row">
       <select id="sFace" class="btn small" aria-label="Blason">${Object.keys(counts).map(k=>`<option value="${k}" ${k===statFace?"selected":""}>${FACES[k].label} (${counts[k]})</option>`).join("")}</select>
       <select id="sN" class="btn small" aria-label="Période"><option value="5">5 dernières</option><option value="10">10 dernières</option><option value="all">Toutes</option></select></div></div>
@@ -575,11 +683,11 @@ function renderStats(){
       <div class="kpi"><span class="label">Séances</span><b class="num">${list.length}</b></div>
       <div class="kpi"><span class="label">Flèches</span><b class="num">${n}</b></div>
       <div class="kpi"><span class="label">Moy./flèche</span><b class="num">${fr(n?tot/n:0)}</b></div>
-      <div class="kpi"><span class="label">${is3?"Taux 10 et 11":"Taux de 10"}</span><b class="num">${n?Math.round(top/n*100):0} %</b></div>
+      <div class="kpi"><span class="label">${topLab}</span><b class="num">${n?Math.round(top/n*100):0} %</b></div>
       <div class="kpi"><span class="label">Meilleure séance</span><b class="num">${best?stats(best).total:"–"}</b><span class="muted" style="font-size:12px">${best?esc(best.name)+" · "+fdate(best.date,{day:"numeric",month:"short"}):"aucune terminée"}</span></div>
     </div>
     <div class="sgrid">
-      <div class="panel chart"><h3>Moyenne par flèche, séance après séance</h3>${lineChart(list.map(s=>({l:fdate(s.date,{day:"numeric",month:"short"}),v:stats(s).avg})),is3?11:10)}</div>
+      <div class="panel chart"><h3>Moyenne par flèche, séance après séance</h3>${lineChart(list.map(s=>({l:fdate(s.date,{day:"numeric",month:"short"}),v:stats(s).avg})),maxArrow(face))}</div>
       <div class="panel"><h3>Répartition des impacts</h3><div class="bars">${distrib(arrows,face)}</div></div>
     </div>
     <div class="panel" style="margin-top:14px"><h3>Groupement</h3><div class="group"><canvas id="gFace"></canvas><div class="txt" id="gTxt"></div></div></div>`;
@@ -589,8 +697,10 @@ function renderStats(){
   group(arrows,face);
 }
 function distrib(arrows,face){
-  const cats=face.kind==="3d"?[11,10,8,5,"M"]:["X",...Array.from({length:11-face.minScore},(_,i)=>10-i),"M"];
-  const cnt=c=>arrows.filter(a=>c==="M"?a.m:c==="X"?a.X:(face.kind!=="3d"&&c===10?a.s===10&&!a.X:a.s===c&&!a.m)).length;
+  if(face.kind==="nature"){ const n=arrows.length||1, vals=[["Tuée",arrows.filter(a=>a.z==="t").length,{z:"t"}],["Blessée",arrows.filter(a=>a.z==="b").length,{z:"b"}],["M",arrows.filter(a=>a.m).length,{m:true}]], mx=Math.max(1,...vals.map(v=>v[1]));
+    return vals.map(([c,v,a])=>{const [bg,fg]=chipColors(face,a);return `<div class="bar"><span class="mini" style="background:${bg};color:${fg};width:auto;padding:0 6px">${c}</span><div class="track"><div class="fill" style="width:${v/mx*100}%"></div></div><span class="v num">${v} · ${Math.round(v/n*100)} %</span></div>`}).join(""); }
+  const cats=face.kind==="field"?[6,5,4,3,2,1,"M"]:face.kind==="3d"?[11,10,8,5,"M"]:["X",...Array.from({length:11-face.minScore},(_,i)=>10-i),"M"];
+  const cnt=c=>arrows.filter(a=>c==="M"?a.m:c==="X"?a.X:(face.kind==="rings"&&c===10?a.s===10&&!a.X:a.s===c&&!a.m)).length;
   const vals=cats.map(c=>[c,cnt(c)]).filter(([c,v])=>v||c!=="X"), n=arrows.length||1, mx=Math.max(1,...vals.map(v=>v[1]));
   return vals.map(([c,v])=>{const [bg,fg]=chipColors(face,c==="M"?{m:true}:c==="X"?{s:10,X:true}:{s:c});
     return `<div class="bar"><span class="mini" style="background:${bg};color:${fg}">${c}</span><div class="track"><div class="fill" style="width:${v/mx*100}%"></div></div><span class="v num">${v} · ${Math.round(v/n*100)} %</span></div>`}).join("");
@@ -619,7 +729,7 @@ function group(arrows,face){
   let view=null, plot=rel;
   if(face.kind==="rings"){const R=(11-face.minScore)*face.w+1.2;view={bounds:[-R,-R,R,R],paper:[-R+.4,-R+.4,R-.4,R-.4]}}
   else plot=pos;
-  const c0=face.kind==="3d"?face.spots[0]:[0,0];
+  const c0=animal(face)?face.spots[0]:[0,0];
   renderFace(cvg,face,plot.map(p=>({x:p.x,y:p.y})),Math.min(300,window.innerWidth-64),300,{only:view,after:(ctx,k,ox,oy)=>{
     const gx=ox+(mx+c0[0])*k, gy=oy+(my+c0[1])*k;
     ctx.beginPath();ctx.arc(gx,gy,disp*k,0,Math.PI*2);ctx.strokeStyle="#0E3B8A";ctx.lineWidth=2;ctx.setLineDash([5,4]);ctx.stroke();ctx.setLineDash([]);

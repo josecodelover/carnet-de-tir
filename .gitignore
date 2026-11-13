@@ -1,3 +1,7 @@
 # APK d'origine et son contenu extrait : copies locales, non publiées
 apk_origine/
 extrait/
+
+# Fichiers intermédiaires de la construction de l'APK (on garde seulement l'APK final)
+android/out/*
+!android/out/CarnetDeTir.apk
