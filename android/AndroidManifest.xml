@@ -1,12 +1,21 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     package="fr.jose.carnetdetir"
-    android:versionCode="2"
-    android:versionName="2.0">
+    android:versionCode="3"
+    android:versionName="3.0">
 
     <uses-sdk android:minSdkVersion="24" android:targetSdkVersion="34" />
 
-    <!-- Aucune permission : pas d'accès réseau, les séances restent sur l'appareil. -->
+    <!-- Saisie par photo : visée intégrée (aperçu caméra avec gabarit). Aucune autre permission :
+         pas d'accès réseau, les séances et les photos restent sur l'appareil. -->
+    <uses-permission android:name="android.permission.CAMERA" />
+    <uses-feature android:name="android.hardware.camera" android:required="false" />
+
+    <queries>
+        <intent><action android:name="android.media.action.IMAGE_CAPTURE" /></intent>
+        <intent><action android:name="android.intent.action.GET_CONTENT" /><data android:mimeType="image/*" /></intent>
+    </queries>
+
     <application
         android:label="Carnet de Tir"
         android:icon="@mipmap/ic_launcher"

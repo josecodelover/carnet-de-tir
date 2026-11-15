@@ -11,7 +11,7 @@ $out   = "out"
 
 Remove-Item -Recurse -Force $out -ErrorAction SilentlyContinue
 New-Item -ItemType Directory -Force "$out\assets", "$out\classes", "$out\dex" | Out-Null
-Copy-Item "..\index.html" "$out\assets\"
+Copy-Item "..\index.html", "..\cible-photo.html" "$out\assets\"   # cible-photo.html : saisie par photo (voir outils\maj-cible-photo.ps1)
 
 # 1. Ressources
 & "$bt\aapt2.exe" compile --dir res -o "$out\res.zip"

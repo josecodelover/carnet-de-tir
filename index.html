@@ -142,6 +142,10 @@ table.card td.c{font-family:var(--f-display);font-size:17px;font-weight:700}
 .detail{display:grid;grid-template-columns:auto minmax(0,1fr);gap:16px;align-items:start}
 @media (max-width:640px){.detail{grid-template-columns:minmax(0,1fr)}.detail canvas{justify-self:center}}
 
+/* Saisie par photo : Cible Photo dans un cadre plein écran */
+.photo{position:fixed;inset:0;z-index:25;background:#eef2ef}
+.photo iframe{display:block;width:100%;height:100%;border:0}
+
 .toast{position:fixed;left:50%;transform:translateX(-50%);bottom:calc(20px + env(safe-area-inset-bottom,0px));background:var(--fg);color:var(--bg);padding:10px 16px;border-radius:8px;font-size:14px;z-index:30;max-width:calc(100% - 32px)}
 @media (prefers-reduced-motion:no-preference){.toast{animation:up .2s ease-out}@keyframes up{from{transform:translate(-50%,8px);opacity:0}}}
 </style>
@@ -168,6 +172,7 @@ table.card td.c{font-family:var(--f-display);font-size:17px;font-weight:700}
           <div class="row sizes" id="sizes" hidden></div>
           <div class="tgtwrap" id="tgtwrap"><canvas id="face" aria-label="Blason : touche ou clique pour placer une flèche"></canvas><canvas id="loupe" hidden></canvas></div>
           <div class="keypad" id="keypad" aria-label="Saisie rapide sans position"></div>
+          <button class="btn" id="photoBtn" hidden style="width:100%;margin-bottom:10px">📷 Saisir la volée par photo</button>
           <div class="row">
             <button class="btn small" id="undo">Annuler la dernière flèche</button>
             <label class="row muted" style="gap:6px;font-size:14px"><input type="checkbox" id="showPrev" checked> Volées précédentes sur le blason</label>
@@ -195,6 +200,7 @@ table.card td.c{font-family:var(--f-display);font-size:17px;font-weight:700}
   <section id="v-stats" hidden></section>
 </div>
 <div id="overlay" class="overlay" hidden></div>
+<div id="photo" class="photo" hidden></div>
 <div id="toast" class="toast" hidden></div>
 
 <script>
@@ -575,6 +581,7 @@ function renderShoot(){
   $("#bigStats").innerHTML=`<div><span class="label">Total</span><b class="num">${st.total}</b></div><div><span class="label">Moy./flèche</span><b class="num">${fr(st.avg)}</b></div><div><span class="label">${tp[0][0]}</span><b class="num">${tp[0][1]}</b></div><div><span class="label">${tp[1][0]}</span><b class="num">${tp[1][1]}</b></div>`;
   $("#scorecard").innerHTML=scorecard(s,a);
   const ni=endArrows.length;
+  $("#photoBtn").hidden=!PHOTO_FACE[s.face];
   const sizes=$("#sizes"); sizes.hidden=face.kind!=="field";
   if(face.kind==="field"){ sizes.innerHTML=`<span class="label">Blason de cette cible</span>`+[20,40,60,80].map(d=>`<button class="btn small" data-d="${d}" aria-pressed="${d===face.d}">${d} cm</button>`).join("");
     sizes.querySelectorAll("[data-d]").forEach(b=>b.onclick=()=>{s.pd=+b.dataset.d;rescore(s,endArrows);a.pending=endArrows.slice();archers(s).forEach(r=>{if(r!==a&&r.pending)rescore(s,r.pending)});Store.put(s,600)}); }
@@ -640,7 +647,42 @@ function openDetail(id){detailId=id;detailA=0;renderDetail()}
 function closeDetail(){detailId=null;$("#overlay").hidden=true;$("#overlay").innerHTML=""}
 $("#overlay").addEventListener("click",e=>{if(e.target.id==="overlay")closeDetail()});
 document.addEventListener("keydown",e=>{if(e.key==="Escape"&&detailId)closeDetail()});
-window.androidBack=()=>{if(!$("#overlay").hidden){closeDetail();return true}return false}; // touche Retour d'Android
+window.androidBack=()=>{ // touche Retour d'Android
+  if(photoWin){photoWin.postMessage({type:"cible-photo:back"},"*");return true}
+  if(!$("#overlay").hidden){closeDetail();return true}return false};
+
+/* ---------- Saisie par photo ----------
+   Cible Photo (cible-photo.html, copie exacte de son index.html) est ouverte dans un cadre, en mode intégré.
+   Elle reçoit le blason, le tube et le nombre de flèches par l'adresse, et rend la volée lue par postMessage.
+   Tout le code d'analyse d'image reste dans Cible Photo : pour le faire évoluer, on travaille dans son dépôt
+   puis on recopie le fichier avec outils/maj-cible-photo.ps1. */
+const PHOTO_FACE={trispot40:["tri",40],single40:["full",40],reduced80:["full",80],full80:["full",80],full122:["full",122]};
+let photoWin=null;
+function openPhoto(){
+  const s=getCur(); if(!s) return; const f=shootFace(s), m=PHOTO_FACE[s.face]; if(!m) return;
+  if(curAr().ends.length>=s.endsPlanned){toast("Cet archer a terminé sa séance.");return}
+  const left=s.arrowsPerEnd-endArrows.length;
+  if(left<1){toast("Volée complète : valide-la pour continuer.");return}
+  const q=new URLSearchParams({embed:1,face:m[0],diam:m[1],shaft:f.arrowR*20,ten:f.indoor&&curAr().bow==="poulies"?"small":"x",per:left});
+  const box=$("#photo"), fr=document.createElement("iframe");
+  fr.title="Saisie par photo"; fr.allow="camera"; fr.src="cible-photo.html?"+q;
+  box.innerHTML=""; box.appendChild(fr); box.hidden=false; photoWin=fr.contentWindow;
+}
+function closePhoto(){photoWin=null;const b=$("#photo");b.hidden=true;b.innerHTML=""}
+$("#photoBtn").onclick=openPhoto;
+window.addEventListener("message",e=>{
+  if(!photoWin||e.source!==photoWin||!e.data) return; const d=e.data;
+  if(d.type==="cible-photo:cancel") return closePhoto();
+  if(d.type!=="cible-photo:end"||!Array.isArray(d.arrows)) return;
+  closePhoto(); const s=getCur(); if(!s) return; const f=shootFace(s); let cord=0;
+  d.arrows.forEach(h=>{
+    const si=f.spots[h.spot]?h.spot:0, c=f.spots[si], v=String(h.v), n=v==="X"?10:(parseInt(v,10)||0), a={spot:si};
+    if(Number.isFinite(h.x)&&Number.isFinite(h.y)){a.x=+(c[0]+h.x*f.w).toFixed(2);a.y=+(c[1]+h.y*f.w).toFixed(2)}
+    if(n<f.minScore||n>10){a.s=0;a.m=true}else{a.s=n;if(v==="X")a.X=true}
+    if(h.cordon) cord++;
+    addArrow(a)});
+  if(cord) toast(cord>1?cord+" cordons à vérifier sur la cible.":"1 cordon à vérifier sur la cible.");
+});
 function renderDetail(){
   const s=Store.map.get(detailId); if(!s){closeDetail();return}
   const all=archers(s); if(detailA>=all.length) detailA=0;
